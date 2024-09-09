@@ -1,0 +1,633 @@
+---
+title: "Cancer CODA"
+author: "John Joseph Mitchell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true # table of content true
+    toc_float: true
+    toc_depth: 3  # upto three depths of headings (specified by #, ## and ###)
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango  # specifies the syntax highlighting style
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+# .rs.restartR()
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, echo=FALSE}
+pacman::p_load("tidyverse", 
+               "data.table", 
+               "tables", 
+               "descr",
+               "ggplot2",
+               "pander",
+               "car",
+               "survival",
+               "rms",
+               "pastecs",
+               "survminer",
+               "haven",
+               "forestplot",
+               "gtable",
+               "ggExtra",
+               "mice",
+               "dplyr",
+               #"sav",
+               "tableone",
+               "survey",
+               "scales",
+               "writexl",
+               "broom",
+               "readxl", 
+               "compositions")
+
+```
+
+
+# Read data
+
+```{r, echo=FALSE}
+set.seed(3112)
+# Setting directory to source file location 
+rstudioapi::getActiveDocumentContext
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+source("C:\\Users\\JohnM\\Desktop\\ProPASS\\CODA_Functions\\LR_ILR_6PART.R")
+source("C:\\Users\\JohnM\\Desktop\\ProPASS\\CODA_Functions\\CODA_ITS_1_cph.R")
+
+dat <- readRDS("C:\\Users\\JohnM\\OneDrive - University College London\\UKBB\\CODA_UKbb_05-09-2024.rds")
+
+
+```
+
+# Sample Fine Gray COX code
+
+
+##CODA_analysis_template
+
+```{r}
+dat <- na.omit(dat)
+dat =
+  dat %>% filter(prev_cancer ==0)
+
+dat =
+  dat %>% filter(prev_cancer ==0 ) %>% 
+  dplyr::select(ID_1, vpa, mpa, slp, lpa, sit, stand, PA_Cancer_inc, PA_Cancer_inc_fup, age, sex)
+
+dat <- na.omit(dat)
+
+winsorize <- function(x, p = 0.975) {
+  upper_limit <- quantile(x, probs = p, na.rm = TRUE)
+  x[x > upper_limit] <- upper_limit
+  return(x)
+}
+
+compo <- dat %>% dplyr::select(vpa, mpa, sit, stand, slp, lpa) %>% winsorize()
+dat <- dat %>% dplyr::select(ID_1, age, sex, PA_Cancer_inc, PA_Cancer_inc_fup)
+dat <- cbind(dat, compo)
+
+
+
+```
+
+```{r}
+
+df_compositional <- data.frame(cbind(dat$mpa, dat$lpa, dat$vpa, dat$slp, dat$stand, dat$sit))
+names(df_compositional) <- c("mpa", "lpa", "vpa", "slp", "stand", "sit")
+df_compositional <- as.data.frame((acomp(df_compositional)))
+head(df_compositional)
+```
+
+#The compositional centre of the sample reflects a more appropriate average and sums to 1.
+
+```{r}
+CompoCentre <- mean(acomp(df_compositional))
+
+```
+
+
+```{r}
+CompoCentre_mins <- as.numeric(CompoCentre)*60*24
+head(CompoCentre)
+labels <- c('MPA', 'LIPA', 'VPA', 'SLP', 'Standing', 'Sitting')
+
+convert_to_hours_minutes <- function(minutes) {
+  hours <- floor(minutes / 60)
+  mins <- round(minutes %% 60)
+  return(paste(hours, "h", mins, "m"))
+}
+
+time_labels <- sapply(CompoCentre_mins, convert_to_hours_minutes)
+df <- data.frame(
+  Activity = labels,
+  Time_Mins = CompoCentre_mins,
+  Time_Label = time_labels
+)
+
+ggplot(df, aes(x = Activity, y = Time_Mins, fill = Activity)) +
+  geom_bar(stat = "identity", color = "black", width = 0.5) +  # thinner bars with borders
+  geom_text(aes(label = Time_Label), vjust = -0.5, color = "black") +
+  scale_fill_grey(start = 0.6, end = 0.9) +  # grayscale fill
+  labs(title = "Activity Distribution (Hours and Minutes)", 
+       y = "Time (minutes)", x = "Activity") +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())  # minimal gridlines
+
+```
+
+
+```{r}
+df_biplot <- subset(dat, select = c("ID_1", "mpa", "lpa", "vpa", "slp", "stand", "sit", "PA_Cancer_inc"))
+
+####### compute CoDa means
+gms <- by(df_biplot[,2:7],df_biplot$PA_Cancer_inc,function(x) mean(acomp(x)))
+gms <- do.call(rbind,gms)
+# Compute compositional difference with respect to overall center [1/4,1/4,1/4,1/4]
+#gcenter <- rep(1/4,4)
+gcenter<-as.numeric(mean(acomp(df_biplot[,2:7])))
+ccgm2 <- t(apply(gms,1,function(x) x/gcenter))
+# now centre 
+# # Compute compositional difference with respect to overall center [1/4,1/4,1/4,1/4]
+#gcenter <- rep(1/4,4)
+#ccgm2 <- t(apply(ccgm2,1,function(x) x/gcenter))
+ccgm2 <-log(ccgm2)
+par(mfrow=c(1,2), oma=c(0,0.0,0.0,5.0))
+library(RColorBrewer)
+# Choose a color palette from RColorBrewer
+colors <- brewer.pal(6, "Set2")  # "Set2" is a nice, soft color palette
+legend1 <- colnames(ccgm2) 
+
+ccgm2
+
+par(mfrow = c(1, 3), oma = c(0, 0, 0, 5))  # Use mfrow = c(1, 3) since you are plotting three barplots
+
+#library(RColorBrewer)
+colors <- brewer.pal(6, "Set2")  # Adjust to 6 to match the number of categories
+legend1 <- colnames(ccgm2)
+
+# Adjust y-limits to ensure all values are visible
+ylim_range <- c(-0.6, 0.4)
+
+# First barplot for "None"
+barplot(ccgm2[1, ], main = "None", col = colors, axes = TRUE, ylim = ylim_range, border = NA, names.arg = NULL) 
+legend("topright", lty = 1, lwd = 4, col = colors, legend = legend1, bty = "n", cex = 0.85)
+abline(h = 0, col = "black", lty = 2)  # Add a horizontal line at y = 0
+grid(nx = NA, ny = NULL)  # Add horizontal grid lines
+
+# Second barplot for "Cancer"
+barplot(ccgm2[2, ], main = "PA-related Cancer", col = colors, axes = TRUE, ylim = ylim_range, border = NA, names.arg = NULL)
+legend("topright", lty = 1, lwd = 4, col = colors, legend = legend1, bty = "n", cex = 0.85)
+abline(h = 0, col = "black", lty = 2)  # Add a horizontal line at y = 0
+grid(nx = NA, ny = NULL)  # Add horizontal grid lines
+
+# Third barplot for "Competing Risk"
+barplot(ccgm2[3, ], main = "Competing Risk", col = colors, axes = TRUE, ylim = ylim_range, border = NA, names.arg = NULL) 
+legend("topright", lty = 1, lwd = 4, col = colors, legend = legend1, bty = "n", cex = 0.85)
+abline(h = 0, col = "black", lty = 2)  # Add a horizontal line at y = 0
+grid(nx = NA, ny = NULL)  # Add horizontal grid lines
+
+axis(4, at = seq(-0.5, 0.5, by = 0.1), las = 2)
+
+```
+
+```{r}
+cancer_mean <- dat %>%
+  filter(PA_Cancer_inc == 1) %>%
+  dplyr::select(mpa,           lpa,          vpa,          slp,       stand,        sit)
+
+healthy_mean <- dat %>%
+  filter(PA_Cancer_inc == 0) %>%
+  dplyr::select(mpa,           lpa,          vpa,          slp,       stand,        sit)
+
+cat("Table of Compositional Centres & Log-ratio Differences
+    ")
+table_comparison <- rbind(CompoCentre, mean(acomp(cancer_mean)), ccgm2[2,], mean(acomp(healthy_mean)), ccgm2[1,] )
+rownames(table_comparison) <- c("Sample Centre", "Cancer", "Cancer_%_Diff",  "Healthy", "Healthy_%_Diff")
+round(table_comparison, digits=4)
+
+```
+
+```{r}
+par(mfrow = c(1, 1), oma = c(0, 0, 0, 5))
+
+colors <- brewer.pal(6, "Set2")  # Adjust to 6 to match the number of categories
+legend1 <- colnames(ccgm2)
+ylim_range <- c(-0.25, 0.25)
+
+barplot(ccgm2[2, ], main = "Dx Cancer", col = colors, axes = TRUE, ylim = ylim_range, border = NA, names.arg = NULL)
+legend("topright", lty = 1, lwd = 4, col = colors, legend = legend1, bty = "n", cex = 0.85)
+abline(h = 0, col = "black", lty = 2)  # Add a horizontal line at y = 0
+grid(nx = NA, ny = NULL)  # Add horizontal grid lines
+axis(4, at = seq(-0.5, 0.5, by = 0.1), las = 2)
+
+```
+
+##Build Compositional Exposure
+
+```{r}
+##Place your composition columns in compo
+compo <- dat %>%
+  dplyr::select(mpa,           lpa,          vpa,          slp,       stand,        sit)
+
+
+library(zCompositions)
+dl <- matrix(0.1667, nrow = 1, ncol = ncol(compo)) 
+compo <- zCompositions::lrEM(acomp(compo), label=0, dl=dl)
+
+# ##simple replacement: 
+# min_value <- 1e-8
+# compo <- apply(compo, 2, function(x) ifelse(x == 0, min_value, x))
+
+outcome <- dat %>% 
+  dplyr::select("PA_Cancer_inc", "PA_Cancer_inc_fup")
+
+```
+
+#Rotation 1 - VPA vs all.
+
+```{r}
+head(compo)
+Zi<-as.data.frame((compo))
+Zi<- ilr(compo)
+
+```
+
+##Test 1##
+```{r}
+
+names(Zi) <- c("VPAvsAll", "SLPvsRemaining", "StandvsRemaining", "SitvsRemaining", "MPAvsLPA")
+#names(Zi) <- c("ILR_1", "ILR_2", "ILR_3", "ILR_4", "ILR_5")
+
+dat_1 <- cbind(dat, Zi)
+dd <- datadist(dat_1$VPAvsAll, dat_1$SLPvsRemaining, dat_1$StandvsRemaining, dat_1$SitvsRemaining, dat_1$MPAvsLPA)
+options(datadist = "dd")
+CompoCentre <- mean(acomp(compo))
+CompoCentre
+CompoCentre <- data.frame(rbind(CompoCentre,CompoCentre))
+CompoCentre_ILR <- ilr(CompoCentre) 
+dd$limits["Adjust to","VPAvsAll"] <- CompoCentre_ILR[1,1]
+dd$limits["Adjust to","StandvsRemaining"]  <- CompoCentre_ILR[1,3]
+dd$limits["Adjust to","SLPvsRemaining"]  <- CompoCentre_ILR[1,2]
+dd$limits["Adjust to","SitvsRemaining"]  <- CompoCentre_ILR[1,4]
+dd$limits["Adjust to","MPAvsLPA"]  <- CompoCentre_ILR[1,5]
+
+##Create numeric Covariates for adjustments
+dat_1 <- dat_1 %>%
+  mutate(smoke_num = case_when(
+    smoke == "current" ~ 2,
+    smoke == "never" ~ 1,
+    smoke == "prev" ~ 0,
+    TRUE ~ NA_real_  # This handles any other values as NA
+  ))
+dat_1 <- dat_1 %>%
+  mutate(alcohol = case_when(
+    alcohol == "above" ~ 0,
+    alcohol == "ex" ~ 1,
+    alcohol == "never" ~ 2,
+     alcohol == "within" ~ 3,
+    TRUE ~ NA_real_  # This handles any other values as NA
+  ))
+
+getmode <- function(x) {
+  uniq_x <- unique(x)
+  uniq_x[which.max(tabulate(match(x, uniq_x)))]
+}
+dat_1 <- dat_1 %>%
+  mutate(edu = case_when(
+    edu == "A_AS" ~ 0,
+    edu == "coll_uni" ~ 1,
+    edu == "CSE" ~ 2,
+     edu == "NVQ_HND_HNC" ~ 3,
+     edu == "O_levels" ~ 4,
+    edu == "Other" ~ 5,
+    TRUE ~ NA_real_  # This handles any other values as NA
+  ))
+
+dat_1$ethnic <- as.numeric(ifelse(dat_1$ethnic=="white", 1, 0))
+dat_1$Medication_cat <- ifelse(dat_1$Medication_cat=="No", 0, 1)
+dd$limits["Adjust to","age"] <- mean(as.numeric(dat$age))
+dat_1$sex_num <- ifelse(dat_1$sex=="Male", 1, 2)
+dd$limits["Adjust to","sex_num"] <- mean(as.numeric(dat_1$sex_num))
+dd$limits["Adjust to","age"] <- mean(as.numeric(dat_1$age), na.rm = TRUE)
+dd$limits["Adjust to","diet"] <-  median(dat_1$diet)
+dd$limits["Adjust to","ethnic"] <- getmode(dat_1$ethnic)
+dd$limits["Adjust to","smoke_num"] <- mean(as.numeric(dat_1$smoke_num), na.rm=T)
+dd$limits["Adjust to","alcohol"] <- getmode(dat_1$alcohol)
+dd$limits["Adjust to","edu"] <- getmode((dat_1$edu))
+dd$limits["Adjust to","prev_cvd"] <- getmode(as.numeric(dat_1$prev_cvd))
+dd$limits["Adjust to","Medication_cat"] <- getmode(as.numeric(dat_1$Medication_cat))
+#dd$limits["Adjust to","family_cvd"] <- getmode(as.numeric(as.character(dat_1$family_cvd)))
+dd$limits["Adjust to","family_cancer"] <- getmode(as.numeric(dat_1$family_cancer))
+#dd$limits["Adjust to","Family_T2D"] <- getmode(as.numeric(dat$Family_T2D))
+#dd$limits["Adjust to","screentime"] <-  median(dat$screentime, na.rm = TRUE)
+
+# dat_temp <-
+#   dat_1 %>%
+#   filter(VPAvsAll > quantile(VPAvsAll, 0.025) & VPAvsAll < quantile(VPAvsAll, 0.975))
+# knots <- quantile(dat_1$VPAvsAll,  c(0.10,  0.50, 0.90))  
+
+dat_1$PA_Cancer_inc<-as.factor(dat_1$PA_Cancer_inc)
+dat_1$PA_Cancer_inc_fup<-as.numeric(dat_1$PA_Cancer_inc_fup)
+dat_1$ethnic <- as.numeric(dat_1$ethnic)
+dat_1$prev_cvd <- as.numeric(dat_1$prev_cvd)
+dat_1$family_cancer <- as.numeric(dat_1$family_cancer)
+cph0 <- finegray(Surv(PA_Cancer_inc_fup, PA_Cancer_inc) ~ .,  data = dat_1, etype = "1")
+
+cph1_vpa <- cph(Surv(fgstart,fgstop,fgstatus) ~  VPAvsAll + SLPvsRemaining + StandvsRemaining + SitvsRemaining + MPAvsLPA, data = cph0, weights = fgwt)
+
+dat_1$PA_Cancer_inc_cph <- ifelse(dat_1$PA_Cancer_inc==1, 1, 0) 
+
+cox_model <- cph(Surv(PA_Cancer_inc_fup, PA_Cancer_inc_cph) ~ VPAvsAll + SLPvsRemaining + StandvsRemaining + SitvsRemaining + MPAvsLPA + age + sex_num, data = dat_1, se.fit = TRUE)
+
+cox_model
+cph1_vpa
+# cph1_vpa <- cph(Surv(fgstart,fgstop,fgstatus) ~  VPAvsAll + SLPvsRemaining + StandvsRemaining + SitvsRemaining + MPAvsLPA + age + sex_num + diet + alcohol + smoke_num + ethnic + edu + prev_cvd + family_cancer + Medication_cat, data = cph0, weights = fgwt)
+
+cph1_vpa
+# #Knots selected from CODA coordinate 1 [no idea what that knot generation results in]
+# cph2 <- cph(Surv(fgstart,fgstop,fgstatus) ~  rcs(Primary_exposure, knots)
+#                + SLPvsRemaining + StandvsRemaining + SitvsRemaining + MPAvsLPA + age + sex, data = cph0, weights = fgwt)
+```
+
+##Isotemporal Substitutions##
+##AROUND MPA##
+
+```{r}
+##Here's an Isotemporal Substitution function, feel free to amend as required#
+##Return compo to your raw numbers, non-compositional
+
+column_names <- c("VPAvsAll", "SLPvsRemaining", "StandvsRemaining", "SitvsRemaining", "MPAvsLPA")
+raw_column_names <- c("mpa", "lpa", "vpa",  "slp"  , "stand" , "sit")
+
+predict_mpa_lpa <- ITS_6_part(dat_1, cph1_vpa, 1, 2, column_names, raw_column_names)
+predict_mpa_vpa <-  ITS_6_part(dat_1, cph1_vpa, 1, 3, column_names, raw_column_names)
+predict_mpa_slp <-  ITS_6_part(dat_1, cph1_vpa, 1, 4, column_names, raw_column_names)
+predict_mpa_stand <-  ITS_6_part(dat_1, cph1_vpa, 1, 5, column_names, raw_column_names)
+predict_mpa_sit <-  ITS_6_part(dat_1, cph1_vpa, 1, 6, column_names, raw_column_names)
+
+
+##Drop a point in at prediction for time exchange ~= 0
+mean_mpa <- mean(acomp(compo))[1]*60*24
+closest_index <- which.min(abs(predict_mpa_lpa$mpa - mean_mpa))
+ITS_centre <- predict_mpa_lpa[closest_index, ]
+
+predict_mpa_lpa$group <- "LPA"
+predict_mpa_vpa$group <- "VPA" 
+predict_mpa_slp$group <- "SLEEP"
+predict_mpa_stand$group <- "Stand"
+predict_mpa_sit$group <- "Sit"
+
+combined_predictions <- rbind(predict_mpa_lpa, predict_mpa_vpa, predict_mpa_slp,predict_mpa_stand, predict_mpa_sit)
+combined_predictions <- combined_predictions %>%
+  mutate(
+    Prediction = yhat - ITS_centre$yhat,
+    CI_Lower = lower - ITS_centre$yhat,
+    CI_Upper = upper - ITS_centre$yhat
+  )
+
+ITS_centre_rescaled <- ITS_centre
+ITS_centre_rescaled$Prediction <- 0
+x_lims <- c(0, ITS_centre$mpa+50)
+
+ggplot(combined_predictions, aes(x = mpa, y = Prediction, color = group)) +
+  geom_line(size = 1.2) +  # Thicker line for predictions
+  geom_ribbon(aes(ymin = CI_Lower, ymax = CI_Upper, fill = group), alpha = 0.2) +  # Shaded area for 95% CI
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 0.5) +  # Reference line for OR = 1
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black", size = 0.8) +  # Dotted reference line for mvpa = 0
+  geom_point(data = ITS_centre_rescaled, aes(x = mpa, y = Prediction), color = "black", size = 3, shape = 21, fill = "white") +  # Dot at composition center with white fill
+  labs(
+    title = "",
+    x = "MPA (minutes)",
+    y = "Hazard Ratio"
+  ) +
+  scale_x_continuous(limits = x_lims) +  # Fixed x-axis limits
+  scale_y_continuous(breaks = seq(-0.2, 0.4, by = 0.1), expand = expansion(mult = c(0, 0)))+  # Expand y-axis limits with padding
+  scale_color_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Custom colors for each group
+  scale_fill_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Fill colors matching line colors
+  theme_classic() +  # White background theme
+  theme(
+    panel.grid.major.y = element_line(color = "grey80", linetype = "dotted"),  # Dotted grid lines for major y-axis
+    panel.grid.minor.y = element_blank(),  # No minor y-axis grid lines
+    panel.grid.major.x = element_blank(),  # No x-axis grid lines
+    panel.grid.minor.x = element_blank(),  # No x-axis grid lines
+    axis.text = element_text(size = 12),  # Adjust axis text size
+    axis.title = element_text(size = 14),  # Adjust axis title size
+    legend.position = "top"  # Position legend at the top
+  ) +
+  coord_cartesian(xlim = c(0, 50), ylim = c(-0.5, 0.5))
+
+dat$PA_Cancer_inc_fup
+```
+##AROUND VPA
+
+```{r}
+##Here's an Isotemporal Substitution function, feel free to amend as required#
+##Return compo to your raw numbers, non-compositional
+
+column_names <- c("VPAvsAll", "SLPvsRemaining", "StandvsRemaining", "SitvsRemaining", "MPAvsLPA") 
+raw_column_names <- c("mpa", "lpa", "vpa",  "slp"  , "stand" , "sit")
+head(compo)
+predict_Vpa_lpa <- ITS_6_part(dat_1, cph1_vpa, 3, 2, column_names, raw_column_names)
+predict_Vpa_mpa <-  ITS_6_part(dat_1, cph1_vpa, 3, 1, column_names, raw_column_names)
+predict_vpa_slp <-  ITS_6_part(dat_1, cph1_vpa, 3, 4, column_names, raw_column_names)
+predict_vpa_stand <-  ITS_6_part(dat_1, cph1_vpa, 3, 5, column_names, raw_column_names)
+predict_vpa_sit <-  ITS_6_part(dat_1, cph1_vpa, 3, 6, column_names, raw_column_names)
+
+##Plot the ITS predictions
+
+##Drop a point in at prediction for time exchange ~= 0
+mean_vpa <- mean(acomp(compo))[3]*60*24
+closest_index <- which.min(abs(predict_mpa_lpa$vpa - mean_vpa))
+ITS_centre <- predict_Vpa_lpa[closest_index, ]
+
+predict_Vpa_lpa$group <- "LPA"
+predict_Vpa_mpa$group <- "MPA" 
+predict_vpa_slp$group <- "SLEEP"
+predict_vpa_stand$group <- "Stand"
+predict_vpa_sit$group <- "Sit"
+
+combined_predictions <- rbind(predict_Vpa_lpa, predict_Vpa_mpa, predict_vpa_slp,predict_vpa_stand, predict_vpa_sit)
+combined_predictions <- combined_predictions %>%
+  mutate(
+    Prediction = yhat - ITS_centre$yhat,
+    CI_Lower = lower - ITS_centre$yhat,
+    CI_Upper = upper - ITS_centre$yhat
+  )
+
+ITS_centre_rescaled <- ITS_centre
+ITS_centre_rescaled$Prediction <- 0
+x_lims <- c(0, ITS_centre$vpa+50)
+
+ggplot(combined_predictions, aes(x = vpa, y = Prediction, color = group)) +
+  geom_line(size = 1.2) +  # Thicker line for predictions
+  geom_ribbon(aes(ymin = CI_Lower, ymax = CI_Upper, fill = group), alpha = 0.2) +  # Shaded area for 95% CI
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 0.5) +  # Reference line for OR = 1
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black", size = 0.8) +  # Dotted reference line for mvpa = 0
+  geom_point(data = ITS_centre_rescaled, aes(x = vpa, y = Prediction), color = "black", size = 3, shape = 21, fill = "white") +  # Dot at composition center with white fill
+  labs(
+    title = "",
+    x = "VPA (minutes)",
+    y = "Hazard Ratio"
+  ) +
+  scale_x_continuous(limits = x_lims) +  # Fixed x-axis limits
+  scale_y_continuous(breaks = seq(-0.2, 0.4, by = 0.1), expand = expansion(mult = c(0, 0)))+  # Expand y-axis limits with padding
+  scale_color_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Custom colors for each group
+  scale_fill_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Fill colors matching line colors
+  theme_classic() +  # White background theme
+  theme(
+    panel.grid.major.y = element_line(color = "grey80", linetype = "dotted"),  # Dotted grid lines for major y-axis
+    panel.grid.minor.y = element_blank(),  # No minor y-axis grid lines
+    panel.grid.major.x = element_blank(),  # No x-axis grid lines
+    panel.grid.minor.x = element_blank(),  # No x-axis grid lines
+    axis.text = element_text(size = 12),  # Adjust axis text size
+    axis.title = element_text(size = 14),  # Adjust axis title size
+    legend.position = "top"  # Position legend at the top
+  ) +
+  coord_cartesian(xlim = c(0, 50), ylim = c(-0.5, 0.5))
+
+```
+
+##Around SITTING
+
+```{r}
+##Here's an Isotemporal Substitution function, feel free to amend as required#
+##Return compo to your raw numbers, non-compositional
+
+column_names <- c("VPAvsAll", "SLPvsRemaining", "StandvsRemaining", "SitvsRemaining", "MPAvsLPA") 
+raw_column_names <- c("mpa", "lpa", "vpa",  "slp"  , "stand" , "sit")
+head(compo)
+predict_sit_lpa <- ITS_6_part(dat_1, cph1_vpa, 6, 2, column_names, raw_column_names)
+predict_sit_mpa <-  ITS_6_part(dat_1, cph1_vpa, 6, 1, column_names, raw_column_names)
+predict_sit_slp <-  ITS_6_part(dat_1, cph1_vpa, 6, 4, column_names, raw_column_names)
+predict_sit_stand <-  ITS_6_part(dat_1, cph1_vpa, 6, 5, column_names, raw_column_names)
+predict_sit_vpa <-  ITS_6_part(dat_1, cph1_vpa, 6, 3, column_names, raw_column_names)
+
+##Plot the ITS predictions
+
+##Drop a point in at prediction for time exchange ~= 0
+mean_sit <- mean(acomp(compo))[6]*60*24
+closest_index <- which.min(abs(predict_mpa_lpa$sit - mean_sit))
+ITS_centre <- predict_sit_lpa[closest_index, ]
+
+predict_sit_lpa$group <- "LPA"
+predict_sit_mpa$group <- "MPA" 
+predict_sit_slp$group <- "SLEEP"
+predict_sit_stand$group <- "Stand"
+predict_sit_vpa$group <- "vpa"
+
+combined_predictions <- rbind(predict_sit_lpa, predict_sit_mpa, predict_sit_slp,predict_sit_stand, predict_sit_vpa)
+combined_predictions <- combined_predictions %>%
+  mutate(
+    Prediction = yhat - ITS_centre$yhat,
+    CI_Lower = lower - ITS_centre$yhat,
+    CI_Upper = upper - ITS_centre$yhat
+  )
+
+ITS_centre_rescaled <- ITS_centre
+ITS_centre_rescaled$Prediction <- 0
+x_lims <- c(550, 600)
+
+ggplot(combined_predictions, aes(x = sit, y = Prediction, color = group)) +
+  geom_line(size = 1.2) +  # Thicker line for predictions
+  geom_ribbon(aes(ymin = CI_Lower, ymax = CI_Upper, fill = group), alpha = 0.2) +  # Shaded area for 95% CI
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 0.5) +  # Reference line for OR = 1
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black", size = 0.8) +  # Dotted reference line for mvpa = 0
+  geom_point(data = ITS_centre_rescaled, aes(x = sit, y = Prediction), color = "black", size = 3, shape = 21, fill = "white") +  # Dot at composition center with white fill
+  labs(
+    title = "",
+    x = "Sit (minutes)",
+    y = "Hazard Ratio"
+  ) +
+  scale_x_continuous(limits = x_lims) +  # Fixed x-axis limits
+  scale_y_continuous(breaks = seq(-0.2, 0.4, by = 0.1), expand = expansion(mult = c(0, 0)))+  # Expand y-axis limits with padding
+  scale_color_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Custom colors for each group
+  scale_fill_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Fill colors matching line colors
+  theme_classic() +  # White background theme
+  theme(
+    panel.grid.major.y = element_line(color = "grey80", linetype = "dotted"),  # Dotted grid lines for major y-axis
+    panel.grid.minor.y = element_blank(),  # No minor y-axis grid lines
+    panel.grid.major.x = element_blank(),  # No x-axis grid lines
+    panel.grid.minor.x = element_blank(),  # No x-axis grid lines
+    axis.text = element_text(size = 12),  # Adjust axis text size
+    axis.title = element_text(size = 14),  # Adjust axis title size
+    legend.position = "top"  # Position legend at the top
+  ) 
+```
+
+##Around SLEEP
+```{r}
+##Here's an Isotemporal Substitution function, feel free to amend as required#
+##Return compo to your raw numbers, non-compositional
+column_names <- c("VPAvsAll", "SLPvsRemaining", "StandvsRemaining", "SitvsRemaining", "MPAvsLPA") 
+raw_column_names <- c("mpa", "lpa", "vpa",  "slp"  , "stand" , "sit")
+head(compo)
+predict_slp_lpa <- ITS_6_part(dat_1, cph1_vpa, 4, 2, column_names, raw_column_names)
+predict_slp_mpa <-  ITS_6_part(dat_1, cph1_vpa, 4, 1, column_names, raw_column_names)
+predict_slp_sit <-  ITS_6_part(dat_1, cph1_vpa, 4, 6, column_names, raw_column_names)
+predict_slp_stand <-  ITS_6_part(dat_1, cph1_vpa, 4, 5, column_names, raw_column_names)
+predict_slp_vpa <-  ITS_6_part(dat_1, cph1_vpa, 4, 3, column_names, raw_column_names)
+
+##Plot the ITS predictions
+
+##Drop a point in at prediction for time exchange ~= 0
+mean_slp <- mean(acomp(compo))[4]*60*24
+closest_index <- which.min(abs(predict_slp_lpa$slp - mean_slp))
+ITS_centre <- predict_slp_lpa[closest_index, ]
+
+predict_slp_lpa$group <- "LPA"
+predict_slp_mpa$group <- "MPA" 
+predict_slp_sit$group <- "SLEEP"
+predict_slp_stand$group <- "Stand"
+predict_slp_vpa$group <- "vpa"
+
+combined_predictions <- rbind(predict_slp_lpa, predict_slp_mpa, predict_slp_sit,predict_slp_stand, predict_slp_vpa)
+combined_predictions <- combined_predictions %>%
+  mutate(
+    Prediction = yhat - ITS_centre$yhat,
+    CI_Lower = lower - ITS_centre$lower,
+    CI_Upper = upper - ITS_centre$upper
+  )
+
+ITS_centre_rescaled <- ITS_centre
+ITS_centre_rescaled$Prediction <- 0
+x_lims <- c(450, ITS_centre$slp+60)
+
+ggplot(combined_predictions, aes(x = slp, y = Prediction, color = group)) +
+  geom_line(size = 1.2) +  # Thicker line for predictions
+  geom_ribbon(aes(ymin = CI_Lower, ymax = CI_Upper, fill = group), alpha = 0.2) +  # Shaded area for 95% CI
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 0.5) +  # Reference line for OR = 1
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black", size = 0.8) +  # Dotted reference line for mvpa = 0
+  geom_point(data = ITS_centre_rescaled, aes(x = slp, y = Prediction), color = "black", size = 3, shape = 21, fill = "white") +  # Dot at composition center with white fill
+  labs(
+    title = "",
+    x = "Sleep (minutes)",
+    y = "Hazard Ratio"
+  ) +
+  scale_x_continuous(limits = x_lims) +  # Fixed x-axis limits
+  scale_y_continuous(breaks = seq(-0.2, 0.4, by = 0.1), expand = expansion(mult = c(0, 0)))+  # Expand y-axis limits with padding
+  scale_color_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Custom colors for each group
+  scale_fill_manual(values = c("blue", "green", "purple", "yellow", "red")) +  # Fill colors matching line colors
+  theme_classic() +  # White background theme
+  theme(
+    panel.grid.major.y = element_line(color = "grey80", linetype = "dotted"),  # Dotted grid lines for major y-axis
+    panel.grid.minor.y = element_blank(),  # No minor y-axis grid lines
+    panel.grid.major.x = element_blank(),  # No x-axis grid lines
+    panel.grid.minor.x = element_blank(),  # No x-axis grid lines
+    axis.text = element_text(size = 12),  # Adjust axis text size
+    axis.title = element_text(size = 14),  # Adjust axis title size
+    legend.position = "top"  # Position legend at the top
+  ) 
+  #coord_cartesian(xlim = c(0, 50), ylim = c(-0.5, 0.5))
+
+```
+
+
+
+
